@@ -4,11 +4,20 @@ Reduce token waste and strengthen context focus for AI coding agents with a sing
 
 ## Quick start
 
-Run from a **project root** (repo with `.git`; the script can create `docs/` when you choose QMD):
+Run from a **project root** (repo with `.git`; the script can create `docs/` when you choose QMD).
+
+**macOS / Linux / WSL**
 
 ```bash
 cd /path/to/your-repo
 ./setup.sh
+```
+
+**Windows Command Prompt**
+
+```bat
+cd \path\to\your-repo
+setup.bat
 ```
 
 Non-interactive examples (Cursor CLI):
@@ -19,6 +28,14 @@ AGENT=cursor MEMORY_TOOL=icm DOCS_TOOL=qmd bash setup.sh
 
 # Cloud memory (Mem0) + Graphify
 AGENT=cursor MEMORY_TOOL=mem0 DOCS_TOOL=graphify MEM0_API_KEY=m0-your-key bash setup.sh
+```
+
+```bat
+REM Windows Command Prompt
+set AGENT=cursor
+set MEMORY_TOOL=icm
+set DOCS_TOOL=qmd
+setup.bat
 ```
 
 ## What gets installed
@@ -46,12 +63,12 @@ Back-compat: `ENABLE_ICM=yes|no` or `ENABLE_MEM0=yes|no` map to `MEMORY_TOOL` wh
 During setup you pick **one** documentation/codebase tool:
 
 - **QMD** — best when your project knowledge lives in markdown under `docs/`. Registers a collection like `<repo>-docs`, runs `qmd embed`, and installs a `post-commit` hook to keep embeddings fresh.
-- **Graphify** — best for larger codebases or monorepos where you need relationship queries across code. Installs `graphifyy[mcp]`, registers Cursor MCP (`python -m graphify.serve …/graphify-out/graph.json`), writes `~/.cursor/rules/graphify.mdc`, and installs a `post-commit` hook to rebuild the graph after code commits. Build once with `graphify .` (or `BUILD_GRAPHIFY=yes`).
+- **Graphify** — best for larger codebases or monorepos where you need relationship queries across code. Installs `graphifyy` (optional `[mcp]` extra for Cursor `query_graph`), writes `~/.cursor/rules/graphify.mdc`, and installs a `post-commit` hook to rebuild the graph after code commits. Build once with `graphify .` (or `BUILD_GRAPHIFY=yes`).
 - **None** — skip both if you only want RTK (+ optional memory).
 
-Set non-interactively with `DOCS_TOOL=qmd`, `DOCS_TOOL=graphify`, or `DOCS_TOOL=none`.
+Set non-interactively with `DOCS_TOOL=qmd`, `DOCS_TOOL=graphify`, or `DOCS_TOOL=none`. For Graphify, `GRAPHIFY_MCP=yes|no` chooses Cursor MCP vs CLI-only.
 
-## How `setup.sh` works
+## How `setup.sh` / `setup.bat` works
 
 1. **RTK** — installs and runs `rtk init` for your agent so command output is compressed before the model sees it.
 2. **ICM or Mem0** (optional, mutually exclusive) — configures persistent memory via MCP and writes agent rules.
@@ -67,6 +84,8 @@ Set non-interactively with `DOCS_TOOL=qmd`, `DOCS_TOOL=graphify`, or `DOCS_TOOL=
 | `MEM0_API_KEY` | `m0-...` | Mem0 Platform API key (only when `MEMORY_TOOL=mem0`) |
 | `DOCS_TOOL` | `qmd`, `graphify`, `none` | Documentation/codebase context tool |
 | `BUILD_GRAPHIFY` | `yes` / `no` | Build `graphify-out/graph.json` during setup (when `DOCS_TOOL=graphify`) |
+| `GRAPHIFY_MCP` | `yes` / `no` | Install `graphifyy[mcp]` (Cursor `query_graph`) vs CLI-only `graphifyy` |
+| `INSTALL_PYTHON` | `yes` / `no` | Windows: install Python 3.12 via winget when Graphify needs it |
 | `AUTO_INSTALL_PREREQS` | `yes` / `no` | Auto-approve system package installs |
 | `SKIP_AGENT_CHECK` | `yes` / `no` | Skip agent install verification (e.g. Docker) |
 

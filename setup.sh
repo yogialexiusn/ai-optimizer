@@ -11,6 +11,7 @@
 #   MEMORY_TOOL=icm|mem0|none    — icm: local memory; mem0: cloud memory (needs MEM0_API_KEY)
 #   DOCS_TOOL=qmd|graphify|none  — qmd: semantic search over docs/**/*.md; graphify: knowledge graph + MCP for larger repos
 #   BUILD_GRAPHIFY=yes|no        — when DOCS_TOOL=graphify, build graphify-out/graph.json during setup
+#   GRAPHIFY_MCP=yes|no          — graphifyy[mcp] (Cursor query_graph) vs CLI-only graphifyy
 #   AUTO_INSTALL_PREREQS=yes|no  — approve all system prerequisite installs
 #   INSTALL_NODEJS=yes|no        — Node.js 22+ via package manager (sudo; required for QMD)
 #   INSTALL_APT_PACKAGES=yes|no  — apt packages such as pipx (sudo)
@@ -323,7 +324,41 @@ select_docs_tool() {
   done
 }
 
+select_graphify_mcp() {
+  if [[ -n "${GRAPHIFY_MCP:-}" ]]; then
+    if env_is_yes "${GRAPHIFY_MCP}"; then
+      GRAPHIFY_MCP="yes"
+      echo "Using GRAPHIFY_MCP=yes from environment."
+      return 0
+    fi
+    if env_is_no "${GRAPHIFY_MCP}"; then
+      GRAPHIFY_MCP="no"
+      echo "Using GRAPHIFY_MCP=no from environment."
+      return 0
+    fi
+    echo "❌ Unknown GRAPHIFY_MCP: ${GRAPHIFY_MCP} (use yes or no)"
+    exit 1
+  fi
+
+  if ! is_interactive; then
+    GRAPHIFY_MCP="yes"
+    echo "⏭️ Non-interactive: GRAPHIFY_MCP=yes (set GRAPHIFY_MCP=no for CLI-only)."
+    return 0
+  fi
+
+  echo ""
+  echo "Install Graphify with MCP extra? (needed for Cursor query_graph / get_neighbors)"
+  echo "  • yes  — graphifyy[mcp]  (Cursor MCP tools)"
+  echo "  • no   — graphifyy only  (CLI: graphify query / graphify path)"
+  select GRAPHIFY_MCP in "yes" "no"; do
+    [[ -n "$GRAPHIFY_MCP" ]] && break
+  done
+}
+
 select_docs_tool
+if [[ "$DOCS_TOOL" == "graphify" ]]; then
+  select_graphify_mcp
+fi
 
 # -------------------------------
 # GLOBAL: RTK
@@ -1263,43 +1298,71 @@ PY
 install_graphify_cli() {
   ensure_local_bin_on_path
 
+  local with_mcp=0
+  if env_is_yes "${GRAPHIFY_MCP:-yes}"; then
+    with_mcp=1
+  fi
+
   if command -v graphify &> /dev/null; then
     echo "✅ Graphify already present: $(command -v graphify)"
-    ensure_graphify_mcp_extra
+    if [[ "$with_mcp" -eq 1 ]]; then
+      ensure_graphify_mcp_extra
+    fi
     return 0
   fi
 
+  if [[ "$with_mcp" -eq 1 ]]; then
+    if ensure_pipx; then
+      echo "📦 Installing Graphify via pipx (graphifyy[mcp])..."
+      if pipx install 'graphifyy[mcp]'; then
+        return 0
+      fi
+      echo "⚠️ pipx install with [mcp] failed; trying plain graphifyy + inject..."
+      if pipx install graphifyy; then
+        pipx inject graphifyy 'graphifyy[mcp]' 2>/dev/null || true
+        return 0
+      fi
+      pipx upgrade graphifyy 2>/dev/null && pipx inject graphifyy 'graphifyy[mcp]' 2>/dev/null && return 0
+    fi
+
+    if command -v uv &> /dev/null; then
+      echo "📦 Installing Graphify via uv tool (graphifyy[mcp])..."
+      uv tool install 'graphifyy[mcp]' && return 0
+      uv tool install graphifyy && return 0
+    fi
+
+    if python3 -m pip --version >/dev/null 2>&1; then
+      echo "📦 Installing Graphify via pip --user (graphifyy[mcp])..."
+      if python3 -m pip install --user --upgrade 'graphifyy[mcp]' 2>/dev/null; then
+        return 0
+      fi
+      if python3 -m pip install --user --upgrade graphifyy 2>/dev/null; then
+        return 0
+      fi
+    fi
+
+    echo "⚠️ Failed to install graphifyy."
+    echo "   On Debian/Ubuntu/WSL, install pipx and retry: sudo apt install pipx && pipx install 'graphifyy[mcp]'"
+    return 1
+  fi
+
   if ensure_pipx; then
-    echo "📦 Installing Graphify via pipx (graphifyy[mcp])..."
-    if pipx install 'graphifyy[mcp]'; then
-      return 0
-    fi
-    echo "⚠️ pipx install with [mcp] failed; trying plain graphifyy + inject..."
-    if pipx install graphifyy; then
-      pipx inject graphifyy 'graphifyy[mcp]' 2>/dev/null || true
-      return 0
-    fi
-    pipx upgrade graphifyy 2>/dev/null && pipx inject graphifyy 'graphifyy[mcp]' 2>/dev/null && return 0
+    echo "📦 Installing Graphify via pipx (graphifyy, CLI only)..."
+    pipx install graphifyy && return 0
   fi
 
   if command -v uv &> /dev/null; then
-    echo "📦 Installing Graphify via uv tool (graphifyy[mcp])..."
-    uv tool install 'graphifyy[mcp]' && return 0
+    echo "📦 Installing Graphify via uv tool (graphifyy, CLI only)..."
     uv tool install graphifyy && return 0
   fi
 
   if python3 -m pip --version >/dev/null 2>&1; then
-    echo "📦 Installing Graphify via pip --user (graphifyy[mcp])..."
-    if python3 -m pip install --user --upgrade 'graphifyy[mcp]' 2>/dev/null; then
-      return 0
-    fi
-    if python3 -m pip install --user --upgrade graphifyy 2>/dev/null; then
-      return 0
-    fi
+    echo "📦 Installing Graphify via pip --user (graphifyy, CLI only)..."
+    python3 -m pip install --user --upgrade graphifyy && return 0
   fi
 
   echo "⚠️ Failed to install graphifyy."
-  echo "   On Debian/Ubuntu/WSL, install pipx and retry: sudo apt install pipx && pipx install 'graphifyy[mcp]'"
+  echo "   On Debian/Ubuntu/WSL, install pipx and retry: sudo apt install pipx && pipx install graphifyy"
   return 1
 }
 
@@ -1356,7 +1419,11 @@ setup_graphify() {
       echo "🔧 Running: graphify ."
       graphify . || echo "⚠️ graphify . failed; run manually later, then restart Cursor."
     else
-      echo "⏭️ Skipping graph build. Later: graphify . && restart Cursor (MCP needs graph.json)."
+      if env_is_no "${GRAPHIFY_MCP:-}"; then
+        echo "⏭️ Skipping graph build. Later: graphify ."
+      else
+        echo "⏭️ Skipping graph build. Later: graphify . && restart Cursor (MCP needs graph.json)."
+      fi
     fi
   else
     echo "✅ Found existing graph: ${graph_json}"
@@ -1367,22 +1434,26 @@ setup_graphify() {
     graphify cursor install || echo "⚠️ graphify cursor install failed; check Cursor rule manually."
     write_cursor_graphify_rule
 
-    ensure_graphify_mcp_extra
-    gpy="$(resolve_graphify_python)"
-    echo "🔧 Registering Graphify MCP in ~/.cursor/mcp.json"
-    echo "   python: ${gpy}"
-    echo "   graph:  ${graph_json}"
-    if ! graphify_python_can_serve "$gpy"; then
-      echo "⚠️ ${gpy} cannot run graphify.serve — install graphifyy[mcp] on this interpreter or use pipx."
-    fi
-    merge_graphify_into_cursor_mcp "$graph_json" "$gpy"
-    if [[ -f "$HOME/.cursor/mcp.json" ]] && grep -q '"graphify"' "$HOME/.cursor/mcp.json" 2>/dev/null; then
-      echo "✅ Graphify MCP configured in ~/.cursor/mcp.json"
+    if env_is_no "${GRAPHIFY_MCP:-}"; then
+      echo "⏭️ Skipping Graphify MCP registration (GRAPHIFY_MCP=no). Use CLI: graphify query / graphify path"
     else
-      echo "⚠️ Graphify MCP may not be listed in ~/.cursor/mcp.json — check manually."
-    fi
-    if [[ ! -f "$graph_json" ]]; then
-      echo "⚠️ MCP is registered but ${graph_json} is missing until you run: graphify ."
+      ensure_graphify_mcp_extra
+      gpy="$(resolve_graphify_python)"
+      echo "🔧 Registering Graphify MCP in ~/.cursor/mcp.json"
+      echo "   python: ${gpy}"
+      echo "   graph:  ${graph_json}"
+      if ! graphify_python_can_serve "$gpy"; then
+        echo "⚠️ ${gpy} cannot run graphify.serve — install graphifyy[mcp] on this interpreter or use pipx."
+      fi
+      merge_graphify_into_cursor_mcp "$graph_json" "$gpy"
+      if [[ -f "$HOME/.cursor/mcp.json" ]] && grep -q '"graphify"' "$HOME/.cursor/mcp.json" 2>/dev/null; then
+        echo "✅ Graphify MCP configured in ~/.cursor/mcp.json"
+      else
+        echo "⚠️ Graphify MCP may not be listed in ~/.cursor/mcp.json — check manually."
+      fi
+      if [[ ! -f "$graph_json" ]]; then
+        echo "⚠️ MCP is registered but ${graph_json} is missing until you run: graphify ."
+      fi
     fi
   fi
 }
@@ -1429,7 +1500,11 @@ write_agents_compression_section() {
       docs_snippet=$'- **QMD**  \n  Semantic search over `docs/**`. Collection: `'"${QMD_COLLECTION}"'` → `qmd://'"${QMD_COLLECTION}"'`. Prefer `qmd search` / `qmd query -c '"${QMD_COLLECTION}"'` before bulk `.md` reads.\n'
       ;;
     graphify)
-      docs_snippet=$'- **Graphify**  \n  Local knowledge graph over code/docs/media ([Graphify-Labs/graphify](https://github.com/Graphify-Labs/graphify)). Build once with `graphify .` → `graphify-out/graph.json`. **Cursor:** MCP (`~/.cursor/mcp.json` → `python -m graphify.serve …`) + rule (`~/.cursor/rules/graphify.mdc`) — prefer `query_graph` / `get_neighbors` / `shortest_path`; CLI fallback: `graphify query` / `graphify path`.\n'
+      if env_is_no "${GRAPHIFY_MCP:-}"; then
+        docs_snippet=$'- **Graphify**  \n  Local knowledge graph over code/docs/media ([Graphify-Labs/graphify](https://github.com/Graphify-Labs/graphify)). Build once with `graphify .` → `graphify-out/graph.json`. CLI: `graphify query` / `graphify path` (installed without MCP extra).\n'
+      else
+        docs_snippet=$'- **Graphify**  \n  Local knowledge graph over code/docs/media ([Graphify-Labs/graphify](https://github.com/Graphify-Labs/graphify)). Build once with `graphify .` → `graphify-out/graph.json`. **Cursor:** MCP (`~/.cursor/mcp.json` → `python -m graphify.serve …`) + rule (`~/.cursor/rules/graphify.mdc`) — prefer `query_graph` / `get_neighbors` / `shortest_path`; CLI fallback: `graphify query` / `graphify path`.\n'
+      fi
       ;;
   esac
 
@@ -1542,6 +1617,9 @@ echo "   Docs tool: ${DOCS_TOOL}"
 if [[ "$DOCS_TOOL" == "qmd" ]]; then
   echo "   QMD collection: ${QMD_COLLECTION} (qmd://${QMD_COLLECTION})"
 fi
+if [[ "$DOCS_TOOL" == "graphify" ]]; then
+  echo "   Graphify MCP: ${GRAPHIFY_MCP:-yes}"
+fi
 echo ""
 
 if [[ "$MEMORY_TOOL" == "icm" ]] && command -v icm &> /dev/null; then
@@ -1562,7 +1640,14 @@ fi
 if [[ "$AGENT" == "cursor" ]]; then
   echo "Next steps for Cursor / Cursor CLI:"
   step=1
-  if [[ "$MEMORY_TOOL" == "icm" || "$MEMORY_TOOL" == "mem0" || "$DOCS_TOOL" == "graphify" ]]; then
+  restart_for_mcp=0
+  if [[ "$MEMORY_TOOL" == "icm" || "$MEMORY_TOOL" == "mem0" ]]; then
+    restart_for_mcp=1
+  fi
+  if [[ "$DOCS_TOOL" == "graphify" ]] && ! env_is_no "${GRAPHIFY_MCP:-}"; then
+    restart_for_mcp=1
+  fi
+  if [[ "$restart_for_mcp" -eq 1 ]]; then
     echo "  ${step}. Restart Cursor so MCP picks up ~/.cursor/mcp.json."
     step=$((step + 1))
   fi
@@ -1581,6 +1666,10 @@ if [[ "$AGENT" == "cursor" ]]; then
   if [[ "$DOCS_TOOL" == "qmd" ]]; then
     echo "  ${step}. Verify QMD: qmd search \"topic\" -c ${QMD_COLLECTION}"
   elif [[ "$DOCS_TOOL" == "graphify" ]]; then
-    echo "  ${step}. Build graph if needed: graphify .  → then verify MCP tool query_graph"
+    if env_is_no "${GRAPHIFY_MCP:-}"; then
+      echo "  ${step}. Build graph if needed: graphify .  → then verify CLI: graphify query \"topic\""
+    else
+      echo "  ${step}. Build graph if needed: graphify .  → then verify MCP tool query_graph"
+    fi
   fi
 fi
